@@ -32,8 +32,6 @@ Use cypher
 // Replace with your network credentials (STATION)
 const char *ssid = "Podmaniczky";
 const char *password = "kiraly42";
-//const char* ssid = "XperiaZ2";
-//const char* password = "12345678z";
 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; //Trying to broadcast to all devices
 uint8_t myAddress[] = {0x5C, 0xCF, 0x7F, 0xC2, 0x67, 0x6E};
@@ -79,42 +77,15 @@ AsyncEventSource events("/events");
 
 JSONVar board;
 JSONVar packets;
-bool newDataFromESP = 0; //if data is received from another device
+//bool newDataFromESP = 0; //if data is received from another device
 bool newDataFromWeb = 0; //if user has clicked on buttons on web interface
 int connectedDevices=0;
+
+/* Function prototypes */
 void printReceivedData();
-void addBoardDataToPacket(JSONVar board);
-
-
-void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus)
-{
-  Serial.print("Last Packet Send Status: ");
-  if (sendStatus == 0)
-  {
-    Serial.println("Delivery success");
-  }
-  else
-  {
-    Serial.println("Delivery fail");
-  }
-}
-
-// callback function that will be executed when data is received
-void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
-{
-  memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
-      
-  printReceivedData();
-
-  board["id"] = random(1,10);
-  board["temperature"] = int(incomingMessage.KeyValue[0].Value);
-  board["humidity"] = int(incomingMessage.KeyValue[1].Value);
-  board["readingId"] = String(incomingMessage.MessageID);
-  addBoardDataToPacket(board);
-  Serial.println("Data received and added to packets!");
-  Serial.println(packets);
-  newDataFromESP = true;
-}
+void addBoardDataToPacket(JSONVar);
+void OnDataSent(uint8_t*, uint8_t);
+void OnDataRecv(uint8_t*, uint8_t*, uint8_t);
 
 void setup()
 {
@@ -237,6 +208,39 @@ void setup()
 #endif
 }
 
+/* Prints the result of sending a message. It does not check if the
+message is delivered */
+void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus)
+{
+  Serial.print("Last Packet Send Status: ");
+  if (sendStatus == 0)
+  {
+    Serial.println("Send success");
+  }
+  else
+  {
+    Serial.println("Send fail");
+  }
+}
+
+/* Callback function that will be executed when data is received */
+void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
+{
+  memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
+      
+  printReceivedData();
+
+  board["id"] = random(1,10);
+  board["temperature"] = int(incomingMessage.KeyValue[0].Value);
+  board["humidity"] = int(incomingMessage.KeyValue[1].Value);
+  board["readingId"] = String(incomingMessage.MessageID);
+  addBoardDataToPacket(board);
+  Serial.println("Data received and added to packets!");
+  Serial.println(packets);
+  //newDataFromESP = true;
+}
+
+/* Prints the incoming message from a node to the Serial port */ 
 void printReceivedData()
 {
   Serial.printf("Target address: %u \n", *incomingMessage.TargetAddress);
@@ -252,6 +256,9 @@ void printReceivedData()
   Serial.println();
 }
 
+/* Appends the JSON packet from the node to an array of packets 
+to send to the server. If there is already a packet with the same ID,
+it will be replaced with the new packet*/
 void addBoardDataToPacket(JSONVar board)
 {
     for(int i=0;i<connectedDevices;i++)
@@ -267,12 +274,11 @@ void addBoardDataToPacket(JSONVar board)
 }
 
 
-//divide this to two functions: sendToDevice(int devid), sendToServer()
-void fillDataToStruct(bool isWebserver) 
+/* If there is an update from the server, this function is called to send update to a node */
+void sendToNode(uint8_t address) 
 {
-  if (isWebserver == true)
-  {
-    memcpy(outgoingMessage.TargetAddress, broadcastAddress, sizeof(outgoingMessage.TargetAddress));
+
+    memcpy(outgoingMessage.TargetAddress, &address, sizeof(outgoingMessage.TargetAddress));
     memcpy(outgoingMessage.SenderAddress, myAddress, sizeof(outgoingMessage.SenderAddress));
     outgoingMessage.MessageID = 43; //just random number for testing
     outgoingMessage.KeyValuesNum = 2;
@@ -280,7 +286,9 @@ void fillDataToStruct(bool isWebserver)
     outgoingMessage.KeyValue[0].Value = inputMessage1.toInt();
     outgoingMessage.KeyValue[1].Key = KEY_GPIO_STATE;
     outgoingMessage.KeyValue[1].Value = inputMessage2.toInt();
-  }
+
+    esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage, sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
+    newDataFromWeb = false;
 }
 
 void loop()
@@ -289,29 +297,29 @@ void loop()
 
   static unsigned long lastEventTime = millis();
   static const unsigned long EVENT_INTERVAL_MS = 5000;
+
+  /* Packets are sent to the server in interval of EVENT_INTERVAL_MS */
   if ((millis() - lastEventTime) > EVENT_INTERVAL_MS)
   {
     String jsonString = JSON.stringify(packets);
     events.send(jsonString.c_str(), "new_readings", millis());
+    Serial.println("New readings sent!");
     lastEventTime = millis();
   }
 
+  /* If there is an update from the server, send it to the node */
   if (newDataFromWeb == true)
   {
-    fillDataToStruct(true);
-    esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage, sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
-    newDataFromWeb = false;
+    sendToNode(*broadcastAddress);
   }
-#endif
 
-#if !defined(WEBSERVER)
+#elif
 
   static unsigned long lastEventTime = millis();
   static const unsigned long EVENT_INTERVAL_MS = 3000;
   if ((millis() - lastEventTime) > EVENT_INTERVAL_MS)
   {
-    fillDataToStruct(false);
-    esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage, sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
+    sendToNode(*broadcastAddress);
     lastEventTime = millis();
   }
 
