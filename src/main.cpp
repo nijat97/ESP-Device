@@ -13,7 +13,7 @@ Use cypher
 */
 
 //uncomment if webserver
-#define WEBSERVER
+//#define WEBSERVER
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
@@ -34,19 +34,11 @@ const char *ssid = "Podmaniczky";
 const char *password = "kiraly42";
 
 uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; //Trying to broadcast to all devices
-uint8_t myAddress[] = {0x5C, 0xCF, 0x7F, 0xC2, 0x67, 0x6E};
+//uint8_t myAddress[] = {0x5C, 0xCF, 0x7F, 0xC2, 0x67, 0x6E};
 //60:01:94:02:de:c7
 
-//for data from webserver
-String inputMessage1;
-String inputMessage2;
 
-//message: TA, Sa, 3, KeyValuesNum:3,
-//0 Key:1-Value:21.4,
-//1 Key:5-Value:1,
-//2 Key:4-Value:2000
-
-//mesh network
+// Structures to hold messages
 struct KeyValue_t
 {
   uint32_t Key;
@@ -55,16 +47,19 @@ struct KeyValue_t
 
 typedef struct Message_t
 {
-
-  uint8_t TargetAddress[4]; //use one byte for address
-  uint8_t SenderAddress[4];
-  uint16_t MessageID;
+  uint16_t TargetAddress; //use one byte for address
+  uint16_t SenderAddress;
+  uint16_t readingID;
   uint16_t KeyValuesNum;
   KeyValue_t KeyValue[10];
 
 } Message;
 
 Message incomingMessage = {0}, outgoingMessage = {0};
+
+// For data from webserver
+String inputMessage1;
+String inputMessage2;
 
 #if defined(WEBSERVER)
 const char *PARAM_INPUT_1 = "output";
@@ -79,7 +74,8 @@ JSONVar board;
 JSONVar packets;
 //bool newDataFromESP = 0; //if data is received from another device
 bool newDataFromWeb = 0; //if user has clicked on buttons on web interface
-int connectedDevices=0;
+int connected_devices=0;
+int msg_count=0;
 
 /* Function prototypes */
 void printReceivedData();
@@ -98,6 +94,11 @@ void setup()
   Serial.println();
   Serial.print("ESP Board MAC Address:  ");
   Serial.println(WiFi.macAddress());
+
+  // Set the sender and target addresses in message packet
+  String addr = WiFi.macAddress().substring(15);
+  memcpy(&outgoingMessage.SenderAddress, &addr, sizeof(addr));
+  memcpy(&outgoingMessage.TargetAddress, &broadcastAddress[5], sizeof(broadcastAddress[5]));
 
   randomSeed(77);
 
@@ -153,23 +154,6 @@ void setup()
   });
 
   /*
-  server.on("/", HTTP_GET, [](AsyncWebServerRequest *request) {
-    AsyncWebServerResponse *response = request->beginResponse(SPIFFS, "/index.html", String(), false);
-    response->addHeader("Access-Control-Allow-Origin", "*");
-    response->addHeader("Access-Control-Max-Age", "10000");
-    response->addHeader("Access-Control-Allow-Methods", "PUT,POST,GET,OPTIONS");
-    response->addHeader("Access-Control-Allow-Headers", "*");
-
-    request->send(response);
-  });
-  
-  server.serveStatic("/", SPIFFS, "/");
-  //find a way to serve static files from the server,
-
-
-  server.on("/demo.js", HTTP_GET, [](AsyncWebServerRequest *request) {
-    request->send(SPIFFS, "/demo.js", "text/javascript");
-  });
 
   server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
     // GET input1 value on <ESP_IP>/update?output=<inputMessage1>&state=<inputMessage2>
@@ -223,17 +207,22 @@ void OnDataSent(uint8_t *mac_addr, uint8_t sendStatus)
   }
 }
 
-/* Callback function that will be executed when data is received */
+/* Callback function that will be executed when data is received on Webserver device */
 void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
 {
   memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
       
   printReceivedData();
+  board["sender"] = int(incomingMessage.SenderAddress);
+  board["target"] = int(incomingMessage.TargetAddress);
+  board["readingId"] = int(incomingMessage.readingID);
 
-  board["id"] = random(1,10);
-  board["temperature"] = int(incomingMessage.KeyValue[0].Value);
-  board["humidity"] = int(incomingMessage.KeyValue[1].Value);
-  board["readingId"] = String(incomingMessage.MessageID);
+  for(int i=0;i<incomingMessage.KeyValuesNum;i++)
+  {
+    board["key" + String(i)] = int(incomingMessage.KeyValue[i].Key);
+    board["value" + String(i)] = int(incomingMessage.KeyValue[i].Value);
+  }
+  
   addBoardDataToPacket(board);
   Serial.println("Data received and added to packets!");
   Serial.println(packets);
@@ -243,9 +232,9 @@ void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
 /* Prints the incoming message from a node to the Serial port */ 
 void printReceivedData()
 {
-  Serial.printf("Target address: %u \n", *incomingMessage.TargetAddress);
-  Serial.printf("Sender address: %u \n", *incomingMessage.SenderAddress);
-  Serial.printf("Message ID: %u \n", incomingMessage.MessageID);
+  Serial.printf("Target address: %u \n", incomingMessage.TargetAddress);
+  Serial.printf("Sender address: %u \n", incomingMessage.SenderAddress);
+  Serial.printf("Reading ID: %u \n", incomingMessage.readingID);
   Serial.printf("Number of KeyValue pairs: %d \n", incomingMessage.KeyValuesNum);
 
   for (int i = 0; i < incomingMessage.KeyValuesNum; i++)
@@ -261,34 +250,42 @@ to send to the server. If there is already a packet with the same ID,
 it will be replaced with the new packet*/
 void addBoardDataToPacket(JSONVar board)
 {
-    for(int i=0;i<connectedDevices;i++)
+    for(int i=0;i<connected_devices;i++)
     {
-        if((int)packets[i]["id"] == (int)board["id"])
+        if((int)packets[i]["sender"] == (int)board["sender"])
         {
           packets[i] = board;
           return;
         }
     }
-    packets[connectedDevices] = board;
-    connectedDevices++;
+    packets[connected_devices] = board;
+    connected_devices++;
 }
 
 
 /* If there is an update from the server, this function is called to send update to a node */
-void sendToNode(uint8_t address) 
+void sendToNode() 
 {
+    outgoingMessage.readingID = msg_count;
+    msg_count++;
 
-    memcpy(outgoingMessage.TargetAddress, &address, sizeof(outgoingMessage.TargetAddress));
-    memcpy(outgoingMessage.SenderAddress, myAddress, sizeof(outgoingMessage.SenderAddress));
-    outgoingMessage.MessageID = 43; //just random number for testing
+    #ifdef WEBSERVER
     outgoingMessage.KeyValuesNum = 2;
     outgoingMessage.KeyValue[0].Key = KEY_GPIO_NUM;
     outgoingMessage.KeyValue[0].Value = inputMessage1.toInt();
     outgoingMessage.KeyValue[1].Key = KEY_GPIO_STATE;
     outgoingMessage.KeyValue[1].Value = inputMessage2.toInt();
-
-    esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage, sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
     newDataFromWeb = false;
+    #else
+    outgoingMessage.KeyValuesNum = 2;
+    outgoingMessage.KeyValue[0].Key = KEY_TEMPERATURE_F_CEL;
+    outgoingMessage.KeyValue[0].Value = 26; //example sensor data
+    outgoingMessage.KeyValue[1].Key = KEY_HUMIDITY_F_PER;
+    outgoingMessage.KeyValue[1].Value = 35; //example sensor data
+    #endif
+    esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage, sizeof(outgoingMessage) -
+    sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
+
 }
 
 void loop()
@@ -310,16 +307,16 @@ void loop()
   /* If there is an update from the server, send it to the node */
   if (newDataFromWeb == true)
   {
-    sendToNode(*broadcastAddress);
+    sendToNode();
   }
 
-#elif
+#else
 
   static unsigned long lastEventTime = millis();
   static const unsigned long EVENT_INTERVAL_MS = 3000;
   if ((millis() - lastEventTime) > EVENT_INTERVAL_MS)
   {
-    sendToNode(*broadcastAddress);
+    sendToNode();
     lastEventTime = millis();
   }
 
