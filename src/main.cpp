@@ -13,7 +13,7 @@ Use cypher
 */
 
 //uncomment if webserver
-//#define WEBSERVER
+#define WEBSERVER
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
@@ -216,11 +216,12 @@ void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
   board["sender"] = int(incomingMessage.SenderAddress);
   board["target"] = int(incomingMessage.TargetAddress);
   board["readingId"] = int(incomingMessage.readingID);
+  board["numOfPairs"] = int(incomingMessage.KeyValuesNum);
 
   for(int i=0;i<incomingMessage.KeyValuesNum;i++)
   {
-    board["key" + String(i)] = int(incomingMessage.KeyValue[i].Key);
-    board["value" + String(i)] = int(incomingMessage.KeyValue[i].Value);
+    board["data"][i] = String("key: " + String(incomingMessage.KeyValue[i].Key) + " value: " + String(incomingMessage.KeyValue[i].Value));
+    //board["value" + String(i)] = int(incomingMessage.KeyValue[i].Value);
   }
   
   addBoardDataToPacket(board);
