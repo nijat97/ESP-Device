@@ -1,12 +1,5 @@
 
 /*
-One ESP sends temperature and humidity data to another ESP that holds webserver. 
-User can send commands from webserver interface to the nodes.
-
-Mesh network
-Little components in React which gives info about the devices, table of devices, every new device shows
-new box in web interface. 
-Fix everything which was problem last semester. Everything should be working with at least min features. 
 
 Create Similar msg structure in React(json,axios)
 Use cypher 
@@ -153,29 +146,20 @@ void setup()
     request->send(SPIFFS, "/index.html", String(), false);
   });
 
-  /*
+  
 
-  server.on("/update", HTTP_GET, [](AsyncWebServerRequest *request) {
-    // GET input1 value on <ESP_IP>/update?output=<inputMessage1>&state=<inputMessage2>
-    if (request->hasParam(PARAM_INPUT_1) && request->hasParam(PARAM_INPUT_2))
-    {
-      inputMessage1 = request->getParam(PARAM_INPUT_1)->value();
-      inputMessage2 = request->getParam(PARAM_INPUT_2)->value();
-
-      newDataFromWeb = true;
-    }
-    else
-    {
-      inputMessage1 = "No message sent";
-      inputMessage2 = "No message sent";
-    }
-    Serial.print("GPIO: ");
-    Serial.print(inputMessage1);
-    Serial.print(" - Set to: ");
-    Serial.println(inputMessage2);
-    request->send(200, "text/plain", "OK");
+  server.on("/update", HTTP_POST, [](AsyncWebServerRequest *request){},NULL,
+    [](AsyncWebServerRequest * request, uint8_t *data, size_t len, size_t index, size_t total) {
+ 
+      for (size_t i = 0; i < len; i++) {
+        Serial.write(data[i]);
+      }
+ 
+      Serial.println();
+ 
+      request->send(200);
   });
-  */
+  
   events.onConnect([](AsyncEventSourceClient *client) {
     if (client->lastId())
     {
@@ -213,6 +197,8 @@ void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
   memcpy(&incomingMessage, incomingData, sizeof(incomingMessage));
       
   printReceivedData();
+
+  #if defined(WEBSERVER)
   board["sender"] = int(incomingMessage.SenderAddress);
   board["target"] = int(incomingMessage.TargetAddress);
   board["readingId"] = int(incomingMessage.readingID);
@@ -227,7 +213,7 @@ void OnDataRecv(uint8_t *mac_addr, uint8_t *incomingData, uint8_t len)
   addBoardDataToPacket(board);
   Serial.println("Data received and added to packets!");
   Serial.println(packets);
-  //newDataFromESP = true;
+  #endif
 }
 
 /* Prints the incoming message from a node to the Serial port */ 
