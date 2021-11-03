@@ -5,7 +5,7 @@ Use cypher
 */
 
 //uncomment if webserver
-#define WEBSERVER
+//#define WEBSERVER
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
@@ -48,7 +48,7 @@ typedef struct Message_t
 
 typedef struct Packet_t
 {
-    uint16_t ID;
+    uint32_t ID;
     uint16_t SenderAddress;
     uint16_t readingId;
     uint32_t Key;
@@ -63,8 +63,6 @@ Packet packets[5] = {0, 0, 0, 0, 0};
 //String inputMessage2;
 
 #if defined(WEBSERVER)
-const char PROGMEM *PARAM_INPUT_1 = "output";
-const char PROGMEM *PARAM_INPUT_2 = "state";
 
 AsyncWebServer server(80);
 AsyncEventSource events("/events");
@@ -74,7 +72,8 @@ AsyncEventSource events("/events");
 String json_string;
 bool newDataFromESP = 0; //if data is received from another device
 bool newDataFromWeb = 0; //if user has clicked on buttons on web interface
-int msg_count = 0;
+int msg_count_rcv = 0;
+int msg_count_snt = 0;
 int index_packet = 0;
 
 /* Function prototypes */
@@ -93,13 +92,6 @@ void setup()
     Serial.println();
     Serial.print(F("ESP Board MAC Address:  "));
     Serial.println(WiFi.macAddress());
-
-    // Set the sender and target addresses in message packet
-    String addr = WiFi.macAddress().substring(15);
-    memcpy(&outgoingMessage.SenderAddress, &addr, sizeof(addr));
-    memcpy(&outgoingMessage.TargetAddress, &broadcastAddress[5], sizeof(broadcastAddress[5]));
-
-    randomSeed(77);
 
     // Set the device as a Station and Soft Access Point simultaneously
     WiFi.mode(WIFI_AP_STA);
@@ -155,12 +147,26 @@ void setup()
         "/update", HTTP_POST, [](AsyncWebServerRequest *request) {}, NULL,
         [](AsyncWebServerRequest *request, uint8_t *data, size_t len, size_t index, size_t total)
         {
+            String input = "";
+            JSONVar input_packet;
             for (size_t i = 0; i < len; i++)
             {
                 Serial.write(data[i]);
+                input += (char)data[i];
             }
+            input_packet = JSON.parse(input);
 
-            Serial.println();
+            if (JSON.typeof(input_packet) == "undefined")
+            {
+                Serial.println("Parsing input failed!");
+                return;
+            }
+            outgoingMessage.SenderAddress = 255;
+            outgoingMessage.TargetAddress = (int)input_packet["target"];
+            outgoingMessage.KeyValuesNum = 1;
+            outgoingMessage.KeyValue[0].Key = (int)input_packet["key"];
+            outgoingMessage.KeyValue[0].Value = (int)input_packet["value"];
+            newDataFromWeb = true;
 
             request->send(200);
         });
@@ -220,29 +226,6 @@ void printReceivedData()
     Serial.println();
 }
 
-/* If there is an update from the server, this function is called to send update to a node */
-void sendToNode()
-{
-    outgoingMessage.readingID = msg_count;
-    msg_count++;
-
-#ifdef WEBSERVER
-    outgoingMessage.KeyValuesNum = 2;
-    outgoingMessage.KeyValue[0].Key = //KEY_GPIO_NUM;
-    //outgoingMessage.KeyValue[0].Value = inputMessage1.toInt();
-    outgoingMessage.KeyValue[1].Key = //KEY_GPIO_STATE;
-    //outgoingMessage.KeyValue[1].Value = inputMessage2.toInt();
-    newDataFromWeb = false;
-#else
-    outgoingMessage.KeyValuesNum = 2;
-    outgoingMessage.KeyValue[0].Key = KEY_LIGHTSTATE_I;
-    outgoingMessage.KeyValue[0].Value = 1; //example sensor data
-    outgoingMessage.KeyValue[1].Key = KEY_AIR_COND_SWITCH_I;
-    outgoingMessage.KeyValue[1].Value = 0; //example sensor data
-#endif
-    esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage, sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
-}
-
 void loop()
 {
 #if defined(WEBSERVER)
@@ -266,7 +249,7 @@ void loop()
                     if (incomingMessage.SenderAddress == packets[j].SenderAddress &&
                         incomingMessage.KeyValue[i].Key == packets[j].Key)
                     {
-                        packets[j].ID = String(String(incomingMessage.SenderAddress%1000) + String(incomingMessage.KeyValue[i].Key)).toInt();
+                        packets[j].ID = String(String(incomingMessage.SenderAddress) + String(incomingMessage.KeyValue[i].Key)).toInt();
                         packets[j].readingId = incomingMessage.readingID;
                         packets[j].Value = incomingMessage.KeyValue[i].Value;
                         is_found = true;
@@ -276,7 +259,7 @@ void loop()
                 {
                     Serial.println(incomingMessage.SenderAddress);
                     Serial.println(incomingMessage.TargetAddress);
-                    packets[index_packet].ID = String(String(incomingMessage.SenderAddress%1000) + String(incomingMessage.KeyValue[i].Key)).toInt();
+                    packets[index_packet].ID = String(String(incomingMessage.SenderAddress) + String(incomingMessage.KeyValue[i].Key)).toInt();
                     packets[index_packet].SenderAddress = incomingMessage.SenderAddress;
                     packets[index_packet].readingId = incomingMessage.readingID;
                     packets[index_packet].Key = incomingMessage.KeyValue[i].Key;
@@ -313,7 +296,11 @@ void loop()
     /* If there is an update from the server, send it to the node */
     if (newDataFromWeb == true)
     {
-        sendToNode();
+        outgoingMessage.readingID = msg_count_snt;
+        msg_count_snt++;
+        esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage,
+        sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
+        newDataFromWeb = false;
     }
 
 #else
@@ -322,9 +309,29 @@ void loop()
     static const unsigned long EVENT_INTERVAL_MS = 3000;
     if ((millis() - lastEventTime) > EVENT_INTERVAL_MS)
     {
-        sendToNode();
+        // Set the sender and target addresses in message packet
+        String addr = WiFi.macAddress().substring(15);
+        memcpy(&outgoingMessage.SenderAddress, &addr, sizeof(addr));
+        memcpy(&outgoingMessage.TargetAddress, &broadcastAddress[5], sizeof(broadcastAddress[5]));
+        outgoingMessage.readingID = msg_count_snt;
+        msg_count_snt++;
+        outgoingMessage.KeyValuesNum = 2;
+        outgoingMessage.KeyValue[0].Key = KEY_LIGHTSTATE_I;
+        outgoingMessage.KeyValue[0].Value = 1; //example sensor data
+        outgoingMessage.KeyValue[1].Key = KEY_AIR_COND_SWITCH_I;
+        outgoingMessage.KeyValue[1].Value = 0; //example sensor data
+
+        esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage,
+                     sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
         lastEventTime = millis();
     }
-
+    
+    if (newDataFromESP)
+    {
+        Serial.println("Data received from webserver:");
+        Serial.println(incomingMessage.KeyValue[0].Key);
+        Serial.println(incomingMessage.KeyValue[0].Value);
+        newDataFromESP = false;
+    }
 #endif
 }
