@@ -1,11 +1,11 @@
 
 /*
-
-Use cypher 
+Project Laboratory work at BME
+Nijat Hasanov
 */
 
 //uncomment if webserver
-//#define WEBSERVER
+#define WEBSERVER
 
 #include <Arduino.h>
 #include <ESP8266WiFi.h>
@@ -75,6 +75,10 @@ bool newDataFromWeb = 0; //if user has clicked on buttons on web interface
 int msg_count_rcv = 0;
 int msg_count_snt = 0;
 int index_packet = 0;
+bool light_state = 1;
+bool air_cond_state = 0;
+int temp_data=28;
+int humidity_data=40;
 
 /* Function prototypes */
 void printReceivedData();
@@ -316,10 +320,10 @@ void loop()
         outgoingMessage.readingID = msg_count_snt;
         msg_count_snt++;
         outgoingMessage.KeyValuesNum = 2;
-        outgoingMessage.KeyValue[0].Key = KEY_LIGHTSTATE_I;
-        outgoingMessage.KeyValue[0].Value = 1; //example sensor data
-        outgoingMessage.KeyValue[1].Key = KEY_AIR_COND_SWITCH_I;
-        outgoingMessage.KeyValue[1].Value = 0; //example sensor data
+        outgoingMessage.KeyValue[0].Key = KEY_TEMPERATURE_F_CEL;
+        outgoingMessage.KeyValue[0].Value = (int)temp_data; //example sensor data
+        outgoingMessage.KeyValue[1].Key = KEY_HUMIDITY_F_PER;
+        outgoingMessage.KeyValue[1].Value = (int)humidity_data; //example sensor data
 
         esp_now_send(broadcastAddress, (uint8_t *)&outgoingMessage,
                      sizeof(outgoingMessage) - sizeof(outgoingMessage.KeyValue) + (outgoingMessage.KeyValuesNum) * sizeof(KeyValue_t));
@@ -331,6 +335,24 @@ void loop()
         Serial.println("Data received from webserver:");
         Serial.println(incomingMessage.KeyValue[0].Key);
         Serial.println(incomingMessage.KeyValue[0].Value);
+        switch(incomingMessage.KeyValue[0].Key)
+        {
+            case KEY_LIGHTSTATE_I:
+                light_state = incomingMessage.KeyValue[0].Value;
+                break;
+            case KEY_AIR_COND_SWITCH_I:
+                air_cond_state = incomingMessage.KeyValue[0].Value;
+                break;
+            case KEY_TEMPERATURE_F_CEL:
+                temp_data = incomingMessage.KeyValue[0].Value;
+                break;
+            case KEY_HUMIDITY_F_PER:
+                humidity_data = incomingMessage.KeyValue[0].Value;
+                break;
+            default: 
+                Serial.println("Unknown key");
+        }
+
         newDataFromESP = false;
     }
 #endif
